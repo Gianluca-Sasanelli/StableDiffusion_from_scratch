@@ -144,16 +144,16 @@ class UNET(nn.Module):
      L_t = E[MSE(eps_t - eps_theta(x_t,t))].
      The model that gives us the eps_theta should work on images such as a Unet."""
 class DiffusionModel(nn.Module):
-    def __init__(self, beta_min: float= 0.0001, beta_max: float = 0.02, steps:int = 50 ):
+    def __init__(self, in_channels:int = 3, latent_dim:int = 256, beta_min: float= 0.0001, beta_max: float = 0.02, steps:int = 50, device = "cuda" ):
         super().__init__()
         #number of time steps
-        self.eps_model = UNET(in_channels = 3, latent_dim= 256, time_steps= steps)
+        self.eps_model = UNET(in_channels = in_channels, latent_dim= latent_dim, time_steps= steps)
         self.steps = steps
         #variance scheduler
-        self.beta = torch.linspace(beta_min, beta_max, steps)
+        self.beta = torch.linspace(beta_min, beta_max, steps).to(device)
         #necessary to compute the mean of q
-        self.alpha = 1 - self.beta
-        self.alpha_tot = torch.cumprod(self.alpha, dim = 0)
+        self.alpha = (1 - self.beta).to(device)
+        self.alpha_tot = torch.cumprod(self.alpha, dim = 0).to(device)
     """Adding noise to the distribution, sampling at any t with the reparametrization trick
     q(xt|x0) = N(xt; alpha_tot^0.5 * x0, (1-alpha_tot) * I)
     """
@@ -178,6 +178,7 @@ class DiffusionModel(nn.Module):
         eps = torch.randn(xt.shape, device = xt.device)
         return mean + (var ** .5) * eps
     """ The loss is between the noise and epsilon """
+    
     def loss(self, x0:torch.Tensor, noise = None):
         batch_size = x0.shape[0]
         t = torch.randint(low = 0, high = self.steps, size= (batch_size,), device = x0.device, dtype = torch.long )
@@ -186,4 +187,18 @@ class DiffusionModel(nn.Module):
         xt = self.sample_q(x0, t, eps = noise)
         eps_theta = self.eps_model(xt, t)
         return F.mse_loss(noise, eps_theta)
+    
+    @torch.no_grad()
+    def visualization(self, x0: torch.Tensor):
+        batch_size = x0.shape[0]
+        device = x0.device
+        t= torch.tensor([2] * batch_size).to(device)
+        xt = self.sample_q(x0,t)
+        out = []
+        for i in range(49):
+            t2 = torch.tensor([i] * batch_size).to(device)
+            result = self.sample_p(xt, t2)
+            out.append(result)
+        return torch.stack(out, dim=0), xt   
+        
         
