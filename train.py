@@ -23,32 +23,34 @@ data_dir = r"C:\Users\Gianl\Desktop\celeba\img_align_celeba" #directory of image
 
 # Parameters
 ## Settings
-image_size = 128
+image_size = 32
 size_dataset = 1.0
 precision = torch.bfloat16
+time_steps = 1000
 ##logging parameters
 out_dir = "output/output_CelebA"
 os.makedirs(out_dir, exist_ok=True)
-log_interval = 5
-eval_iters = 10
-init_from = "scratch"
+log_interval = 20
+eval_iters = 5
+init_from = "resume"
 num_epochs = 10
 best_val_loss = 1e9
 
 
 ##model parameters
 in_channels = 3
-latent_dimension = 512
+latent_dimension = 128
+hidden_dims = [32, 64, 128, 256]
 ##Training parameters
-batch_size = 128
-max_lr = 0.005
-gamma = 0.95
+batch_size = 256
+max_lr = 0.01
+gamma = 0.90
 # gradient_accomulation_iter = 1
 decay_lr = True
 grad_clip = 1.0
 
 #Defining the module
-model_args = dict(in_channels = in_channels, latent_dim = latent_dimension)
+model_args = dict(in_channels = in_channels, latent_dim = latent_dimension, steps = time_steps, hidden_dims = hidden_dims)
 #optimizer and scheduler
 if init_from == "scratch":
     print("Initializing a new model from scratch")
@@ -59,15 +61,16 @@ elif init_from == "resume":
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
     checkpoint = torch.load(ckpt_path, map_location = device)
     checkpoint_model_args = checkpoint["model_args"]
-    for k in ['in_channels', 'latent_dim', 'kld_weight', 'hidden_dims']:
+    for k in ['in_channels', 'latent_dim', 'steps', 'hidden_dims']:
         model_args[k] = checkpoint_model_args[k]
-    model = VanillaVAE(**model_args)
+    model = DiffusionModel(**model_args)
     state_dict = checkpoint["model"]
     model.load_state_dict(state_dict)
     resume_epoch = checkpoint["epoch"]
     best_val_loss = checkpoint["best_val_loss"]
     
 model.to(device)
+print("Num parameters is:", model.num_parameters())
 optimizer = torch.optim.Adam(model.parameters(), lr = max_lr)
 if init_from == "resume":
     optimizer.load_state_dict(checkpoint["optimizer"])
@@ -139,7 +142,7 @@ def one_epoch_pass():
             last_loss= loss.item()
             t1 = datetime.datetime.now()
             dt = t1 -t0 
-            print(f"step {i // log_interval}| loss {last_loss:.5f}| norm: {norm:.2f}| time {dt.seconds:.2f} s")
+            print(f"step {i // log_interval} of {len(train_loader) // log_interval}| loss {last_loss:.3f}| norm: {norm:.2f}| time {dt.seconds} s")
             t0 = t1
     return [last_loss]
 
@@ -156,7 +159,7 @@ for epoch in range(resume_epoch, num_epochs):
     t0 = datetime.datetime.now()
     losses = estimate_loss()
     val_losses.append(losses["val"])
-    print(f"val | epoch {epoch}| train loss {losses['train']:.4f}| val  loss {losses['val']:.2e}")
+    print(f"val | epoch {epoch}| train loss {losses['train']:.4f}| val  loss {losses['val']:.4f}")
     if losses["val"] < best_val_loss:
             best_val_loss = losses["val"]
             if epoch > 0:
