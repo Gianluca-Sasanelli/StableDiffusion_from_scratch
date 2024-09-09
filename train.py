@@ -23,39 +23,39 @@ data_dir = r"C:\Users\Gianl\Desktop\celeba\img_align_celeba" #directory of image
 
 # Parameters
 ## Settings
-image_size = 32
-size_dataset = 1.0
+size_dataset = 1
 precision = torch.bfloat16
 time_steps = 1000
 ##logging parameters
-out_dir = "output/output_CelebA"
+out_dir = "output/output_CelebAUnet2"
 os.makedirs(out_dir, exist_ok=True)
-log_interval = 20
+log_interval = 30
 eval_iters = 5
-init_from = "resume"
+init_from = "scratch"
 num_epochs = 10
 best_val_loss = 1e9
 
 
 ##model parameters
 in_channels = 3
-latent_dimension = 128
-hidden_dims = [32, 64, 128, 256]
+hidden_dims = [32, 64, 128, 256, 512]
+is_attn = False
 ##Training parameters
-batch_size = 256
-max_lr = 0.01
+batch_size = 64
+max_lr = 0.00008
 gamma = 0.90
 # gradient_accomulation_iter = 1
 decay_lr = True
 grad_clip = 1.0
 
 #Defining the module
-model_args = dict(in_channels = in_channels, latent_dim = latent_dimension, steps = time_steps, hidden_dims = hidden_dims)
+model_args = dict(in_channels = in_channels, steps = time_steps, hidden_dims = hidden_dims, is_attn=is_attn   )
+image_size = 128
 #optimizer and scheduler
 if init_from == "scratch":
     print("Initializing a new model from scratch")
     model = DiffusionModel(**model_args)
-    resume_epoch = 0
+    resume_epoch = 0 
 elif init_from == "resume":
     print(f"Resuming from {out_dir}")
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
@@ -66,12 +66,14 @@ elif init_from == "resume":
     model = DiffusionModel(**model_args)
     state_dict = checkpoint["model"]
     model.load_state_dict(state_dict)
-    resume_epoch = checkpoint["epoch"]
+    resume_epoch = checkpoint["epoch"] + 1
     best_val_loss = checkpoint["best_val_loss"]
+    image_size = checkpoint["image_size"]
     
 model.to(device)
 print("Num parameters is:", model.num_parameters())
-optimizer = torch.optim.Adam(model.parameters(), lr = max_lr)
+optimizer = model.config_optimizer(lr = max_lr, weight_decay= 0.0)
+
 if init_from == "resume":
     optimizer.load_state_dict(checkpoint["optimizer"])
 checkpoint = None #flush the memory
@@ -80,6 +82,7 @@ checkpoint = None #flush the memory
 transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
+            transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
         ])
 
 def get_batch(split):
@@ -164,12 +167,13 @@ for epoch in range(resume_epoch, num_epochs):
             best_val_loss = losses["val"]
             if epoch > 0:
                 checkpoint = {
+                    "image_size": image_size,
                     "model" : model.state_dict(),
                     "optimizer" : optimizer.state_dict(),
                     "model_args": model_args,
                     "epoch": epoch,
                     "best_val_loss": best_val_loss,
-                }    
+                }
                 print(f"save checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
             with open(out_dir + os.sep + "train_losses.pkl", "wb") as file:
