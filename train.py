@@ -7,7 +7,8 @@ from PIL import Image
 from model import *
 from utils import CelebA, galaxy_Dataset
 
-
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 # #Parser. Use --config $ConfigPath. Reading from yaml config file
 # parser = argparse.ArgumentParser()
 # parser.add_argument("--config", type = str, required = True, help = "config path")
@@ -32,25 +33,26 @@ os.makedirs(out_dir, exist_ok=True)
 log_interval = 30
 eval_iters = 5
 init_from = "scratch"
-num_epochs = 10
+num_epochs = 100
 best_val_loss = 1e9
 
 
 ##model parameters
 in_channels = 3
-hidden_dims = [32, 64, 128, 256, 512]
+hidden_dims = [6, 12, 24]
 is_attn = False
+dropout = 0.01
 ##Training parameters
-batch_size = 64
-max_lr = 0.00008
+batch_size = 512
+max_lr = 0.00005
 gamma = 0.90
 # gradient_accomulation_iter = 1
 decay_lr = True
 grad_clip = 1.0
 
 #Defining the module
-model_args = dict(in_channels = in_channels, steps = time_steps, hidden_dims = hidden_dims, is_attn=is_attn   )
-image_size = 128
+model_args = dict(in_channels = in_channels, steps = time_steps, hidden_dims = hidden_dims, is_attn=is_attn, dropout=dropout)
+image_size = 32
 #optimizer and scheduler
 if init_from == "scratch":
     print("Initializing a new model from scratch")
@@ -73,7 +75,6 @@ elif init_from == "resume":
 model.to(device)
 print("Num parameters is:", model.num_parameters())
 optimizer = model.config_optimizer(lr = max_lr, weight_decay= 0.0)
-
 if init_from == "resume":
     optimizer.load_state_dict(checkpoint["optimizer"])
 checkpoint = None #flush the memory
@@ -81,8 +82,9 @@ checkpoint = None #flush the memory
 #useful functions
 transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
+            transforms.CenterCrop(32),
             transforms.ToTensor(),
-            transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+            transforms.Normalize(mean = [0.485, 0.456, 0.406],std= [0.229, 0.224, 0.225])
         ])
 
 def get_batch(split):
@@ -102,7 +104,7 @@ data = CelebA(data_dir, transform = transform, size = size_dataset) # with size 
 train_split = int(len(data) * 0.9)
 val_split = len(data) - train_split
 train_set, val_set = torch.utils.data.random_split(data, [train_split, val_split])
-train_loader = torch.utils.data.DataLoader(train_set, batch_size = batch_size, shuffle = True, pin_memory = True)
+train_loader = torch.utils.data.DataLoader(train_set, batch_size = batch_size, shuffle = True, pin_memory = True, num_workers = 0)
 val_loader = torch.utils.data.DataLoader(val_set, batch_size = batch_size, shuffle = False, pin_memory = True)
 print("Length train loader:", len(train_loader))
 # -------------------------------------

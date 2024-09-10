@@ -137,7 +137,7 @@ The neural backbone that predicts the noise is a UNET.
 #         return x
 #Residual Block in the horizontal layers. The time embeddings are added to the images between the convolutional layers
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, time_steps: int = None, dropout: float = 0.1, up: bool= False):
+    def __init__(self, in_channels, out_channels, time_steps: int = None, dropout: float = 0.3, up: bool= False):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels , stride= 1, padding = 1,kernel_size = 3) 
         self.norm1 = nn.BatchNorm2d(out_channels)
@@ -151,12 +151,16 @@ class ResidualBlock(nn.Module):
         
         if time_steps is not None:
             self.time_emb = nn.Linear(time_steps, out_channels)
+            
+            
         if in_channels == out_channels and up is False:
             self.conv_shortcut = nn.Identity()
         elif in_channels != out_channels and up is False:
             self.conv_shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding = 1)
         elif in_channels != out_channels and up is True:
             self.conv_shortcut = nn.Conv2d(in_channels, out_channels // 2, kernel_size=3, stride=1, padding = 1)
+            
+
         self.dropout = nn.Dropout(dropout)
         
     def forward(self, input:torch.Tensor, t:torch.Tensor):
@@ -196,9 +200,9 @@ class Attention_Block(nn.Module):
         
 #Horizontal block in the UNET
 class HorBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, time_steps: int, has_attn: bool= False, up: bool = False):
+    def __init__(self, in_channels: int, out_channels: int, time_steps: int, has_attn: bool= False, up: bool = False, dropout= None):
         super().__init__()
-        self.res = ResidualBlock(in_channels, out_channels, time_steps, up= up)
+        self.res = ResidualBlock(in_channels, out_channels, time_steps, up= up, dropout = dropout)
         if has_attn:
             self.attn = Attention_Block(out_channels )
         else:
@@ -231,18 +235,18 @@ class UpSample(nn.Module):
     
 #Middle block at the bottom of the UNET
 class Middle_block(nn.Module):
-    def __init__(self, in_channels: int, time_steps: int):
+    def __init__(self, in_channels: int, time_steps: int, dropout: float = 0.0):
         super().__init__()
-        self.res1 = ResidualBlock(in_channels, in_channels, time_steps)
+        self.res1 = ResidualBlock(in_channels, in_channels, time_steps, dropout)
         self.attn = Attention_Block(in_channels)
-        self.res2 = ResidualBlock(in_channels, in_channels, time_steps)
+        self.res2 = ResidualBlock(in_channels, in_channels, time_steps, dropout)
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         x = self.res1(x,t)
         x = self.attn(x)
         x = self.res2(x,t)
         return x
 class UNET2(nn.Module):
-     def __init__(self, in_channels: int, time_steps:int = 1000, is_attn: bool = False, hidden_dims = None):
+     def __init__(self, in_channels: int, time_steps:int = 1000, is_attn: bool = False, hidden_dims = None, dropout: float = 0.1):
           super().__init__()
           
           self.in_channels = in_channels
@@ -257,10 +261,10 @@ class UNET2(nn.Module):
           for i in range(len(hidden_dims)-1):
                in_channels = hidden_dims[i]
                out_channels = hidden_dims[i + 1]
-               down_modules.append(HorBlock(in_channels = in_channels, out_channels = out_channels, time_steps= self.time_steps))
+               down_modules.append(HorBlock(in_channels = in_channels, out_channels = out_channels, time_steps= self.time_steps, dropout=dropout))
                down_modules.append(DownSample(in_channels=out_channels))
           self.downpass = nn.ModuleList(down_modules)
-          self.middle = Middle_block(in_channels = hidden_dims[-1], time_steps= self.time_steps)
+          self.middle = Middle_block(in_channels = hidden_dims[-1], time_steps= self.time_steps, dropout=dropout)
           #building the decoder
           up = []
           hidden_dims.pop(0)
@@ -270,10 +274,10 @@ class UNET2(nn.Module):
                up.append(UpSample(in_channels = in_channels))
                in_channels = in_channels * 2
                out_channels = hidden_dims[i+1 ] * 2
-               up.append(HorBlock(in_channels = in_channels,out_channels=out_channels, time_steps= self.time_steps, up = True))
+               up.append(HorBlock(in_channels = in_channels,out_channels=out_channels, time_steps= self.time_steps, up = True, dropout=dropout))
           self.uppass = nn.ModuleList(up)
           self.lastup = UpSample(hidden_dims[-1])
-          self.lastlayer= HorBlock(in_channels = hidden_dims[-1]*2, out_channels= self.in_channels *2, time_steps=self.time_steps, up = True)
+          self.lastlayer= HorBlock(in_channels = hidden_dims[-1]*2, out_channels= self.in_channels *2, time_steps=self.time_steps, up = True, dropout=dropout)
           self.lastact = nn.Tanh()
           
      def encoder(self, x: torch.Tensor, t: torch.Tensor = None):
@@ -340,12 +344,12 @@ class DiffusionModel(nn.Module):
     def __init__(self, in_channels:int = 3,
                  hidden_dims = None, beta_min: float= 0.0001,
                  beta_max: float = 0.02, steps:int = 1000, 
-                 is_attn: bool = False, device = "cuda" ):
+                 is_attn: bool = False, dropout: float = 0.1, device = "cuda" ):
         super().__init__()
         #The model that returns the noise which is with the same shape of the image
         self.reconstructed_noise = UNET2(in_channels = in_channels, 
                                          time_steps= steps, hidden_dims=hidden_dims, 
-                                         is_attn = is_attn)
+                                         is_attn = is_attn, dropout= dropout)
         #time steps
         self.steps = steps
         #variance scheduler
