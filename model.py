@@ -167,7 +167,7 @@ class ResidualBlock(nn.Module):
         x =self.act1(self.norm1(self.conv1(input)))
         t = self.time_emb(t)[:,:,None,None]
         x += t
-        x= self.act1(self.norm2(self.conv2(x)))
+        x= self.dropout(self.act1(self.norm2(self.conv2(x))))
         x += self.conv_shortcut(input)
         return x
     
@@ -204,7 +204,7 @@ class HorBlock(nn.Module):
         super().__init__()
         self.res = ResidualBlock(in_channels, out_channels, time_steps, up= up, dropout = dropout)
         if has_attn:
-            self.attn = Attention_Block(out_channels )
+            self.attn = Attention_Block(out_channels, dropout )
         else:
             self.attn = nn.Identity()
     def forward(self, x:torch.Tensor, t: torch.Tensor):
@@ -238,7 +238,7 @@ class Middle_block(nn.Module):
     def __init__(self, in_channels: int, time_steps: int, dropout: float = 0.0):
         super().__init__()
         self.res1 = ResidualBlock(in_channels, in_channels, time_steps, dropout)
-        self.attn = Attention_Block(in_channels)
+        self.attn = Attention_Block(in_channels, dropout = dropout)
         self.res2 = ResidualBlock(in_channels, in_channels, time_steps, dropout)
     def forward(self, x: torch.Tensor, t: torch.Tensor):
         x = self.res1(x,t)
@@ -250,11 +250,11 @@ class UNET2(nn.Module):
           super().__init__()
           
           self.in_channels = in_channels
-          self.time_emb = nn.Embedding(time_steps, time_steps * 2) 
-          self.time_steps = time_steps * 2
+          self.time_emb = nn.Embedding(time_steps, 2048) 
+          self.time_steps = 2048
           #Dimension of the features
           if hidden_dims is None:
-               hidden_dims = [32, 64, 128, 256, 512, 1024]
+               hidden_dims = [64, 128, 256, 512, 1024]
           hidden_dims.insert(0, in_channels)
           #Building the encoder
           down_modules = []
@@ -279,7 +279,28 @@ class UNET2(nn.Module):
           self.lastup = UpSample(hidden_dims[-1])
           self.lastlayer= HorBlock(in_channels = hidden_dims[-1]*2, out_channels= self.in_channels *2, time_steps=self.time_steps, up = True, dropout=dropout)
           self.lastact = nn.Tanh()
+          self.apply(self._init_weights)
           
+          
+     def _init_weights(self, module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)   
+            elif isinstance(module, nn.Conv2d):
+                #I find it better than xavier initialization
+                torch.nn.init.normal_(module.weight, mean=0.0, std = 0.02)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.ConvTranspose2d):
+                torch.nn.init.normal_(module.weight, mean=0.0, std = 0.02)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+                    
+                    
+                    
      def encoder(self, x: torch.Tensor, t: torch.Tensor = None):
           residuals = []
           i = 0
@@ -300,7 +321,7 @@ class UNET2(nn.Module):
                i +=2
           x = self.lastup(x)
           x = torch.cat((x, residuals[-1]), dim =1)
-          x = self.lastact(self.lastlayer(x,t))
+          x = self.lastlayer(x,t)
           return x
      
      def forward(self, x:torch.Tensor, t: torch.Tensor):
@@ -310,23 +331,8 @@ class UNET2(nn.Module):
           x = self.decoder(x= x, residuals = residuals, t= time_embeddings)
           return x
       
-     def configure_optimizers(self, weight_decay, learning_rate):
-        # Getting parameters with requires_grad = True
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-        optim_groups = [
-            {'params': decay_params, 'weight_decay': weight_decay},
-            {'params': nodecay_params, 'weight_decay': 0.0}
-        ]
-        num_decay_params = sum(p.numel() for p in decay_params)
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
-        optimizer = torch.optim.Adam(optim_groups, lr=learning_rate)
+     def configure_optimizers(self, learning_rate):
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         return optimizer    
                            
 
@@ -396,8 +402,8 @@ class DiffusionModel(nn.Module):
     def num_parameters(self):
         return sum(p.numel() for p in self.reconstructed_noise.parameters() if p.requires_grad)
     
-    def config_optimizer(self, weight_decay, lr):
-        optimizer = self.reconstructed_noise.configure_optimizers(weight_decay=weight_decay, learning_rate = lr)
+    def config_optimizer(self, lr):
+        optimizer = self.reconstructed_noise.configure_optimizers( learning_rate = lr)
         return optimizer
     
     @torch.no_grad()
