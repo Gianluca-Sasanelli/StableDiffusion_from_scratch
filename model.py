@@ -20,154 +20,31 @@ The neural backbone that predicts the noise is a UNET.
 
 
 """
-
-# class DownSample(nn.Module):
-#     def __init__(self, in_channels, out_channels,time_steps: int = None):
-#         super().__init__()
-#         self.conv1 = nn.Conv2d(in_channels, out_channels , stride= 1, padding = 1,kernel_size = 3) 
-#         self.norm1 = nn.BatchNorm2d(out_channels) 
-#         self.act1 = nn.SiLU() 
-        
-#         self.conv2 = nn.Conv2d(out_channels, out_channels , stride= 1, padding = 1,kernel_size = 3) 
-#         self.norm2 = nn.BatchNorm2d(out_channels) 
-#         self.act2 = nn.SiLU() 
-
-#         #half of the size
-#         self.down = nn.Sequential(
-#             nn.Conv2d(out_channels, out_channels , stride= 2, padding = 1,kernel_size = 3),
-#             nn.BatchNorm2d(out_channels),
-#             nn.SiLU()
-#             )
-        
-#         if time_steps is not None:
-#             self.time_emb = nn.Embedding(time_steps, out_channels)
-#         if in_channels == out_channels:
-#             self.conv_shortcut = nn.Identity()
-#         else:
-#             self.conv_shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding = 1)
-        
-#     def forward(self, input: torch.Tensor,t: torch.Tensor = None):
-#         x = self.act1(self.norm1(self.conv1(input)))
-#         #adding the time embedding between the two convolutions
-#         x += self.time_emb(t)[:,:,None, None]
-#         res = self.act2(self.norm2(self.conv2(x)))
-#         res += self.conv_shortcut(input)
-#         x= self.down(res)
-#         return x, res
-    
-# class UpSample(nn.Module):
-#     def __init__(self, in_channels):
-#         super().__init__()
-#         assert in_channels % 2 == 0, "in_channels must be even"
-#         self.horizontal = nn.Sequential(
-#             nn.Conv2d(in_channels, in_channels // 2 , stride= 1, padding = 1,kernel_size = 3),
-#             nn.BatchNorm2d(in_channels // 2),
-#             nn.SiLU(),
-#             nn.Conv2d(in_channels // 2, in_channels // 4, stride= 1, padding = 1,kernel_size = 3),
-#             nn.BatchNorm2d(in_channels // 4),
-#             nn.SiLU(),
-#             )
-#         #half of the size
-#         self.up = nn.Sequential(
-#             nn.ConvTranspose2d(in_channels // 4, in_channels // 4 , stride= 2, padding = 1,kernel_size = 3, output_padding= 1),
-#             nn.BatchNorm2d(in_channels // 4),
-#             nn.SiLU()
-#             )
-        
-#     def forward(self, x: torch.Tensor):
-#         x = self.horizontal(x)
-#         x = self.up(x)
-#         return x
-# class UNET(nn.Module):
-#     #supposing that the image size is 128
-#     def __init__(self, in_channels: int, latent_dim: int = 128, time_steps:int = 50, hidden_dims = None):
-#         super().__init__()
-        
-#         self.latent_dim = latent_dim
-#         self.time_steps = time_steps
-#         #Dimensionality of the feature channels
-#         if hidden_dims is None:
-#             hidden_dims = [32, 64, 128, 256, 512, 1024]
-#         hidden_dims.insert(0, in_channels) 
-        
-#         self.final_hidden_dim = hidden_dims[-1]
-#         #Adding the downsample, horizontal convolutions with residuals and time embeddings
-#         self.downpass = nn.ModuleList(
-#             [DownSample(in_channels = hidden_dims[i], out_channels = hidden_dims[i+1], time_steps= time_steps) for i in range(len(hidden_dims) -1 )]) 
-#         #With image of (128)^2 the size before the linear layer is (2,2)
-#         #encoder-decoder in the latent dimension
-#         self.enc_lin = nn.Linear(self.final_hidden_dim*4, latent_dim)
-#         self.dec_lin = nn.Linear(latent_dim, self.final_hidden_dim * 16)
-        
-#         hidden_dims.reverse()
-#         #Symmetrical opposit of the downpass, without the time embeddings
-#         self.uppass = nn.ModuleList(
-#             [UpSample(in_channels = hidden_dims[i]* 2) for i in range(len(hidden_dims) - 2 )])
-#         self.final_layer = nn.Sequential( 
-#                                          nn.Conv2d(in_channels= hidden_dims[-2] , out_channels=hidden_dims[-1], kernel_size=3,
-#                                                    stride=1, padding=1),
-#                                          nn.Tanh()
-#                                          )
-            
-#         hidden_dims.reverse()
-#         hidden_dims.pop(0)
-# #from image to latent dimension        
-#     def encoder(self, x: torch.Tensor, t:torch.Tensor = None):
-#         residuals = []
-#         for down in self.downpass:
-#             x, res = down(x, t)
-#             residuals.append(res)
-#         x = torch.flatten(x, start_dim= 1)
-#         x = self.enc_lin(x)
-#         return x, residuals
-# #from latent dimension to image
-#     def decoder(self, x: torch.Tensor, residuals: list):
-#         x = self.dec_lin(x)
-#         x = x.view(-1, self.final_hidden_dim, 4, 4)
-#         for i, up in enumerate(self.uppass):
-#             x = torch.cat((x, residuals[i]), dim = 1)
-#             x = up(x)
-#         return x
-    
-#     def forward(self, x: torch.Tensor, t: torch.Tensor):
-#         x, residuals = self.encoder(x, t)
-#         residuals.reverse()
-#         x = self.decoder(x, residuals)
-#         x = self.final_layer(x)
-#         return x
-#Residual Block in the horizontal layers. The time embeddings are added to the images between the convolutional layers
 class ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, time_steps: int = None, dropout: float = 0.3, up: bool= False):
+    def __init__(self, in_channels, out_channels, time_steps: int = None, dropout: float = 0.0,  sec_out_divisor: int = 1):
         super().__init__()
+        self.norm1 = nn.GroupNorm(32, in_channels)
         self.conv1 = nn.Conv2d(in_channels, out_channels , stride= 1, padding = 1,kernel_size = 3) 
-        self.norm1 = nn.BatchNorm2d(out_channels)
         self.act1 = nn.SiLU()
-        if up is False:  
-            self.conv2 = nn.Conv2d(out_channels, out_channels , stride= 1, padding = 1,kernel_size = 3)
-            self.norm2 = nn.BatchNorm2d(out_channels)
-        else:
-            self.conv2 = nn.Conv2d(out_channels, out_channels // 2 , stride= 1, padding = 1,kernel_size = 3)
-            self.norm2 = nn.BatchNorm2d(out_channels // 2)            
-        
+        self.norm2 = nn.GroupNorm(32, out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels // sec_out_divisor , stride= 1, padding = 1,kernel_size = 3)    
+      
         if time_steps is not None:
-            self.time_emb = nn.Linear(time_steps, out_channels)
-            
-            
-        if in_channels == out_channels and up is False:
+            self.time_emb = nn.Linear(time_steps, out_channels)                      
+        if in_channels == out_channels and sec_out_divisor == 1:
             self.conv_shortcut = nn.Identity()
-        elif in_channels != out_channels and up is False:
-            self.conv_shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding = 1)
-        elif in_channels != out_channels and up is True:
-            self.conv_shortcut = nn.Conv2d(in_channels, out_channels // 2, kernel_size=3, stride=1, padding = 1)
             
-
-        self.dropout = nn.Dropout(dropout)
+        else:
+            self.conv_shortcut = nn.Conv2d(in_channels, out_channels // sec_out_divisor, kernel_size=3, stride=1, padding = 1)
+            
+        self.dropout = nn.Dropout(dropout)        
         
     def forward(self, input:torch.Tensor, t:torch.Tensor):
-        x =self.act1(self.norm1(self.conv1(input)))
+        x = self.conv1(self.act1(self.norm1(input)))
         t = self.time_emb(t)[:,:,None,None]
+        #adding the time embeddings
         x += t
-        x= self.dropout(self.act1(self.norm2(self.conv2(x))))
+        x= self.conv2(self.act1(self.norm2(self.dropout(x))))
         x += self.conv_shortcut(input)
         return x
     
@@ -176,6 +53,7 @@ class Attention_Block(nn.Module):
     def __init__(self, n_channels: int, n_heads:int = 1, dropout: float = 0.1):
         super().__init__()
         self.n_channels = n_channels
+        #projection in queries, keys and values
         self.projections = nn.Linear(n_channels, n_channels * 3* n_heads)
         self.output_projection = nn.Linear(n_channels * n_heads, n_channels)
         flash = hasattr(nn.functional, "scaled_dot_product_attention")
@@ -200,11 +78,11 @@ class Attention_Block(nn.Module):
         
 #Horizontal block in the UNET
 class HorBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, time_steps: int, has_attn: bool= False, up: bool = False, dropout= None):
+    def __init__(self, in_channels: int, out_channels: int, time_steps: int, is_attn: bool= False, dropout= None, sec_out_divisor : int = 1):
         super().__init__()
-        self.res = ResidualBlock(in_channels, out_channels, time_steps, up= up, dropout = dropout)
-        if has_attn:
-            self.attn = Attention_Block(out_channels, dropout )
+        self.res = ResidualBlock(in_channels, out_channels, time_steps, dropout = dropout, sec_out_divisor= sec_out_divisor)
+        if is_attn:
+            self.attn = Attention_Block(out_channels // sec_out_divisor, dropout = dropout )
         else:
             self.attn = nn.Identity()
     def forward(self, x:torch.Tensor, t: torch.Tensor):
@@ -217,20 +95,21 @@ class DownSample(nn.Module):
     def __init__(self, in_channels: int):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=in_channels , stride= 2, padding = 1,kernel_size = 3)
-        self.norm1 = nn.BatchNorm2d(in_channels)
+        self.norm1 = nn.GroupNorm(32, in_channels)
         self.act1 = nn.SiLU()
-    def forward(self, x: torch.Tensor):
-        x = self.act1(self.norm1(self.conv1(x)))
+    def forward(self, x: torch.Tensor, t:torch.Tensor):
+        _= t
+        x = self.conv1(self.act1(self.norm1(x)))
         return x
 #Upsample with transposted conv
 class UpSample(nn.Module):
     def __init__(self, in_channels: int):
         super().__init__()
         self.conv1 = nn.ConvTranspose2d(in_channels, in_channels , stride= 2, padding = 1,kernel_size = 3, output_padding= 1)
-        self.norm1 = nn.BatchNorm2d(in_channels)
+        self.norm1 = nn.GroupNorm(32, in_channels)
         self.act1 = nn.SiLU()
     def forward(self, x: torch.Tensor):
-        x = self.act1(self.norm1(self.conv1(x)))
+        x = self.conv1(self.act1(self.norm1(x)))
         return x
     
 #Middle block at the bottom of the UNET
@@ -245,43 +124,55 @@ class Middle_block(nn.Module):
         x = self.attn(x)
         x = self.res2(x,t)
         return x
-class UNET2(nn.Module):
-     def __init__(self, in_channels: int, time_steps:int = 1000, is_attn: bool = False, hidden_dims = None, dropout: float = 0.1):
-          super().__init__()
-          
-          self.in_channels = in_channels
-          self.time_emb = nn.Embedding(time_steps, 2048) 
-          self.time_steps = 2048
-          #Dimension of the features
-          if hidden_dims is None:
-               hidden_dims = [64, 128, 256, 512, 1024]
-          hidden_dims.insert(0, in_channels)
-          #Building the encoder
-          down_modules = []
-          for i in range(len(hidden_dims)-1):
-               in_channels = hidden_dims[i]
-               out_channels = hidden_dims[i + 1]
-               down_modules.append(HorBlock(in_channels = in_channels, out_channels = out_channels, time_steps= self.time_steps, dropout=dropout))
-               down_modules.append(DownSample(in_channels=out_channels))
-          self.downpass = nn.ModuleList(down_modules)
-          self.middle = Middle_block(in_channels = hidden_dims[-1], time_steps= self.time_steps, dropout=dropout)
-          #building the decoder
-          up = []
-          hidden_dims.pop(0)
-          hidden_dims.reverse()
-          for i in range(len(hidden_dims)-1):
-               in_channels = hidden_dims[i]
-               up.append(UpSample(in_channels = in_channels))
-               in_channels = in_channels * 2
-               out_channels = hidden_dims[i+1 ] * 2
-               up.append(HorBlock(in_channels = in_channels,out_channels=out_channels, time_steps= self.time_steps, up = True, dropout=dropout))
-          self.uppass = nn.ModuleList(up)
-          self.lastup = UpSample(hidden_dims[-1])
-          self.lastlayer= HorBlock(in_channels = hidden_dims[-1]*2, out_channels= self.in_channels *2, time_steps=self.time_steps, up = True, dropout=dropout)
-          self.lastact = nn.Tanh()
-          self.apply(self._init_weights)
-          
-          
+class UNET(nn.Module):
+     def __init__(self, in_channels: int,  proj_channels: int = 64, is_attn: list = None, multipliers: list = None, dropout: float = 0.1, time_steps:int = 1000):
+        super().__init__()  
+        """ This is a UNNET module. The output is an image with the same shape of the input.
+        The time steps are embedded into a 2048 vector and then applied at any level both in the descending and ascending block.
+            :param in_channels: (int) Channels of the input. 3 if RGB
+            :param proj_channels: (int) First projections of the input
+            :param is_attn : (list) List of bools indicating whether an attention should be applied at that position 
+            :param multipliers : (list) List multipliers of the channels used in deeper layers of the model 
+            :param dropout : (float) dropout to be applied in the residual layers 
+            :param time_steps : (int) time_steps
+        """
+        self.in_channels = in_channels
+        self.time_emb = nn.Embedding(time_steps, 2048) 
+        self.time_steps = 2048
+        self.img_proj = nn.Conv2d(in_channels, proj_channels, kernel_size=3, padding=1, stride = 1)
+        if multipliers is None:
+            self.multipliers = [1,2,2,4]
+        else:
+            self.multipliers = multipliers
+        if is_attn is None:
+            is_attn = [False, False, False, False]
+        self.hidden_dims = [i*proj_channels for i in self.multipliers]
+        self.hidden_dims.insert(0, proj_channels)
+        #
+        downpass = []
+        for i in range(len(self.hidden_dims)-1):
+            in_channels = self.hidden_dims[i]
+            out_channels = self.hidden_dims[i + 1]
+            downpass.append(HorBlock(in_channels=in_channels, out_channels=out_channels, dropout = dropout, time_steps= 2048, is_attn=is_attn[i]))
+            downpass.append(DownSample(out_channels))
+        self.downpass = nn.ModuleList(downpass)
+        self.middle = Middle_block(self.hidden_dims[-1], time_steps= self.time_steps, dropout = dropout)
+        up = []
+        for i in reversed(range(1, (len(self.hidden_dims)))):
+            in_channels = self.hidden_dims[i]
+            up.append(UpSample(in_channels = in_channels))
+            in_channels = in_channels * 2
+            out_channels = self.hidden_dims[i-1] * 2
+            up.append(HorBlock(in_channels = in_channels,out_channels=out_channels, time_steps= self.time_steps, dropout=dropout, sec_out_divisor = 2, is_attn= is_attn[i -1]))
+        self.uppass = nn.ModuleList(up)
+        
+        #Last layer
+        self.out_norm = nn.BatchNorm2d(self.hidden_dims[0])
+        self.out_act = nn.SiLU()
+        self.out_projections = nn.Conv2d(self.hidden_dims[0]*2 , self.in_channels, kernel_size=3, stride = 1, padding = 1)
+        self.apply(self._init_weights)
+        
+        
      def _init_weights(self, module):
             if isinstance(module, nn.Linear):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -302,11 +193,11 @@ class UNET2(nn.Module):
                     
                     
      def encoder(self, x: torch.Tensor, t: torch.Tensor = None):
-          residuals = []
+          residuals = [x]
           i = 0
           while i < len(self.downpass): 
                res = self.downpass[i](x, t)
-               x = self.downpass[i+1](res)
+               x = self.downpass[i+1](res, t)
                residuals.append(res)
                i += 2
           return x, residuals
@@ -319,17 +210,18 @@ class UNET2(nn.Module):
                x = torch.cat((x, residuals[i // 2]), dim = 1) #concat on feature dimension   
                x = self.uppass[i+1](x, t)
                i +=2
-          x = self.lastup(x)
           x = torch.cat((x, residuals[-1]), dim =1)
-          x = self.lastlayer(x,t)
+          x = self.out_projections(x)
           return x
      
      def forward(self, x:torch.Tensor, t: torch.Tensor):
           time_embeddings = self.time_emb(t)
+          x = self.img_proj(x)
           x, residuals = self.encoder(x, time_embeddings)
           x = self.middle(x, time_embeddings)
           x = self.decoder(x= x, residuals = residuals, t= time_embeddings)
           return x
+
       
      def configure_optimizers(self, learning_rate):
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
@@ -348,13 +240,13 @@ class UNET2(nn.Module):
      The model that gives us the eps_theta should work on images such as a Unet."""
 class DiffusionModel(nn.Module):
     def __init__(self, in_channels:int = 3,
-                 hidden_dims = None, beta_min: float= 0.0001,
+                 multipliers = None, proj_channels = 64, beta_min: float= 0.0001,
                  beta_max: float = 0.02, steps:int = 1000, 
-                 is_attn: bool = False, dropout: float = 0.1, device = "cuda" ):
+                 is_attn: list = None, dropout: float = 0.1, device = "cuda" ):
         super().__init__()
         #The model that returns the noise which is with the same shape of the image
-        self.reconstructed_noise = UNET2(in_channels = in_channels, 
-                                         time_steps= steps, hidden_dims=hidden_dims, 
+        self.reconstructed_noise = UNET(in_channels = in_channels, proj_channels=proj_channels, 
+                                         time_steps= steps, multipliers=multipliers, 
                                          is_attn = is_attn, dropout= dropout)
         #time steps
         self.steps = steps
