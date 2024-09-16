@@ -1,6 +1,7 @@
 import torch,math
 import torch.nn as nn
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
 # Main ideas behind the paper/model https://arxiv.org/pdf/2112.10752:
 # 1)Doing the diffusion process on a lower dimensional space (obtained 
 # with an autoencoder). It is computationally more efficient than doing it on pixel levels.
@@ -279,7 +280,11 @@ class DiffusionModel(nn.Module):
         sample = mean + (torch.sqrt(var)) *eps
         return sample, eps_theta
     
-    
+    def sample_x0(self, xt, t, noise):
+        alpha_tot = self.alpha_tot[t].view(-1,1,1,1)
+        x0 = (xt - torch.sqrt(1-alpha_tot)*noise)/ torch.sqrt(alpha_tot)
+        return x0
+
     """Computing the loss is between the added noise and the reconstructed noise """
         
     def loss(self, x0:torch.Tensor, noise = None):
@@ -299,28 +304,26 @@ class DiffusionModel(nn.Module):
         return optimizer
     
     @torch.no_grad()
-    def generate_image(self, img_shape, starting_image = None):
-        """
-        Generate an image starting from total noise by reversing the diffusion process.
-        
-        Args:
-            img_shape (tuple): Shape of the image to generate (e.g., (batch_size, channels, height, width)).
-        
-        Returns:
-            torch.Tensor: Generated images.
-        """
+    def generate_image(self,img_shape, interval, steps= 999,  starting_noise = None):
+
         # Step 1: Initialize pure noise (final step in the forward process)
-        xt = torch.randn(img_shape, device=self.alpha.device)  # Starting from pure noise (x_T)
-        
-        # Step 2: Reverse diffusion process (from step T to 0)
-        for t in reversed(range(self.steps)):
+        if starting_noise is None:
+            xt = torch.randn(img_shape, device=self.alpha.device)  # Starting from pure noise (x_T)
+        else: 
+            xt = starting_noise
+        for t in reversed(range(steps)):
+
             # Get current time as a tensor
             time_tensor = torch.tensor([t] * img_shape[0], device=self.alpha.device)
-            
-            # Sample the previous step (p(x_{t-1} | x_t))
+            if t % interval == 0:
+                self.show_image(xt[0], f"{t}")
             xt, _ = self.sample_p(xt, time_tensor)
         
-        # Step 3: Return the denoised image (x0 approximation)
-        return xt
+    def show_image(self, img, title):
+        img = img.clip(0,1)
+        img = img.cpu().numpy()
+        plt.title(title)
+        plt.imshow(img.transpose(1,2,0))
+        plt.show()
         
         

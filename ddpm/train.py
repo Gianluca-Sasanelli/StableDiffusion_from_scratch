@@ -27,13 +27,13 @@ def main():
     # Parameters
     ## Settings
     size_dataset = 1
-    time_steps = 1000
+    time_steps = 1250
     ##logging parameters
-    out_dir = "output/output_CelebAUnet2"
+    out_dir = "output/output_CelebAUnet32"
     os.makedirs(out_dir, exist_ok=True)
     log_interval = 100
     eval_iters = 10
-    init_from = "scratch"
+    init_from = "resume"
     num_epochs = 100
     best_val_loss = 1e9
 
@@ -41,17 +41,16 @@ def main():
     ##model parameters
     in_channels = 3
     proj_channels = 128
-    multipliers = [1,2,2,4]
-    is_attn = [False, False, True, True]
-    dropout = 0.1
+    multipliers = [2,2,4,4]
+    is_attn = [True, True, True, True]
+    dropout = 0.01
     ##Training parameters
-    batch_size = 128
+    batch_size = 32
     max_lr = 0.00002
-    gamma = 0.999
+    gamma = 0.9
     # gradient_accomulation_iter = 1
     decay_lr = True
     grad_clip = 10
-    .0
 
     #Defining the module
     model_args = dict(in_channels = in_channels, proj_channels = proj_channels, steps = time_steps, multipliers = multipliers, dropout = dropout, is_attn = is_attn )
@@ -66,7 +65,7 @@ def main():
         ckpt_path = os.path.join(out_dir, "ckpt.pt")
         checkpoint = torch.load(ckpt_path, map_location = device)
         checkpoint_model_args = checkpoint["model_args"]
-        for k in ['in_channels', 'latent_dim', 'steps', 'hidden_dims']:
+        for k in ['in_channels', 'steps', 'proj_channels', 'steps', 'multipliers', 'dropout', "is_attn"]:
             model_args[k] = checkpoint_model_args[k]
         model = DiffusionModel(**model_args)
         state_dict = checkpoint["model"]
@@ -86,8 +85,7 @@ def main():
     transform = transforms.Compose([
                 transforms.Resize((image_size, image_size)),
                 transforms.CenterCrop(image_size),
-                transforms.ToTensor(),
-                transforms.Normalize(mean = [0.485, 0.456, 0.406] ,std= [0.229, 0.224, 0.225]) 
+                transforms.ToTensor() 
             ])
 
 
@@ -102,7 +100,7 @@ def main():
     val_split = len(data) - train_split
     train_set, val_set = torch.utils.data.random_split(data, [train_split, val_split])
     #num_workers = 3 is optimal for my hardware
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size = batch_size, shuffle = True, pin_memory = True, num_workers = 4)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size = batch_size, shuffle = True, pin_memory = True, num_workers = 2)
     val_loader = torch.utils.data.DataLoader(val_set, batch_size = batch_size, shuffle = False, pin_memory = True)
     print("Length train loader:", len(train_loader))
     # -------------------------------------
